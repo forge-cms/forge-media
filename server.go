@@ -88,12 +88,37 @@ func (s *Server) HTTPHandler() http.Handler {
 //   - description — alt text / caption (required for images; WCAG 1.1.1)
 //
 // Returns 201 JSON on success.
+// uploadAllowedMIMEs is the set of MIME types accepted when the request is
+// authorised by an UploadToken (as opposed to a full admin bearer token).
+// Bearer-token uploads are not restricted to this list.
+var uploadAllowedMIMEs = map[string]bool{
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/webp": true,
+	"image/gif":  true,
+	"image/avif": true,
+}
+
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Config()
-	user, ok := forge.VerifyBearerToken(r, cfg.Secret, cfg.TokenStore)
-	if !ok || !user.HasRole(forge.Author) {
-		forge.WriteError(w, r, forge.ErrUnauth)
-		return
+
+	// Accept either a full bearer token (Author+) or a short-lived upload token.
+	var uploadTokenAuth bool
+	authHeader := r.Header.Get("Authorization")
+	switch {
+	case strings.HasPrefix(authHeader, "UploadToken "):
+		token := strings.TrimPrefix(authHeader, "UploadToken ")
+		if err := s.app.ValidateUploadToken(token); err != nil {
+			forge.WriteError(w, r, forge.ErrUnauth)
+			return
+		}
+		uploadTokenAuth = true
+	default:
+		user, ok := forge.VerifyBearerToken(r, cfg.Secret, cfg.TokenStore)
+		if !ok || !user.HasRole(forge.Author) {
+			forge.WriteError(w, r, forge.ErrUnauth)
+			return
+		}
 	}
 
 	// Enforce size limit before reading the body.
@@ -132,6 +157,13 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mt := detectMediaType(mimeType)
+
+	// UploadToken uploads are restricted to image MIME types only.
+	// Bearer-token (admin) uploads are not restricted.
+	if uploadTokenAuth && !uploadAllowedMIMEs[mimeType] {
+		forge.WriteError(w, r, forge.Err("file", "upload token only accepts image/jpeg, image/png, image/webp, image/gif, image/avif"))
+		return
+	}
 
 	// WCAG 1.1.1 — alt text required for images.
 	if mt == MediaTypeImage && description == "" {

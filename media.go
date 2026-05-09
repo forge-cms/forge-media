@@ -17,7 +17,6 @@ package forgemedia
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -160,18 +159,20 @@ func (s *LocalMediaStore) URL(filename string) string {
 // ─── Filename generation ──────────────────────────────────────────────────────
 
 // generateFilename produces a storage filename from the original upload name.
-// Format: <unix-nanoseconds>_<12-hex-random>_<sanitized-original>
-// The original name is lower-cased and non-alphanumeric characters (except
-// dots and hyphens) are replaced with underscores. Leading dots are stripped.
+// Format: <32-hex-random>-<sanitized-original>
+// The 32-character lowercase hex prefix (16 random bytes) prevents filename
+// collisions. Hex encoding is used so the prefix never contains a hyphen,
+// making the separator unambiguous. The original name is lower-cased and
+// non-alphanumeric characters (except dots and hyphens) are replaced with
+// underscores. Leading dots are stripped.
 func generateFilename(original string) (string, error) {
-	b := make([]byte, 6)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("forgemedia: generate random suffix: %w", err)
+	b := make([]byte, 16)
+	if _, err := randRead(b); err != nil {
+		return "", fmt.Errorf("forgemedia: generate random prefix: %w", err)
 	}
-	rnd := hex.EncodeToString(b)
-	ts := fmt.Sprintf("%d", time.Now().UnixNano())
+	prefix := hex.EncodeToString(b)
 	sanitized := sanitizeFilename(original)
-	return ts + "_" + rnd + "_" + sanitized, nil
+	return prefix + "-" + sanitized, nil
 }
 
 // sanitizeFilename lower-cases name, replaces disallowed characters with
@@ -202,6 +203,7 @@ var extToMIME = map[string]string{
 	".png":  "image/png",
 	".gif":  "image/gif",
 	".webp": "image/webp",
+	".avif": "image/avif",
 	".svg":  "image/svg+xml",
 	".mp4":  "video/mp4",
 	".webm": "video/webm",
@@ -218,6 +220,7 @@ var extToLabel = map[string]string{
 	".png":  "PNG",
 	".gif":  "GIF",
 	".webp": "WebP",
+	".avif": "AVIF",
 	".svg":  "SVG",
 	".mp4":  "MP4",
 	".webm": "WebM",
@@ -233,6 +236,7 @@ var mimeToLabel = map[string]string{
 	"image/png":       "PNG",
 	"image/gif":       "GIF",
 	"image/webp":      "WebP",
+	"image/avif":      "AVIF",
 	"image/svg+xml":   "SVG",
 	"video/mp4":       "MP4",
 	"video/webm":      "WebM",
@@ -303,6 +307,14 @@ func sniffMIME(data []byte) string {
 	// PDF: "%PDF"
 	if n >= 4 && data[0] == '%' && data[1] == 'P' && data[2] == 'D' && data[3] == 'F' {
 		return "application/pdf"
+	}
+	// AVIF: ftyp box at bytes 4–7, brand "avif" or "avis" at bytes 8–11.
+	// Must be checked before the generic MP4 ftyp check below.
+	if n >= 12 &&
+		data[4] == 'f' && data[5] == 't' && data[6] == 'y' && data[7] == 'p' &&
+		data[8] == 'a' && data[9] == 'v' && data[10] == 'i' &&
+		(data[11] == 'f' || data[11] == 's') {
+		return "image/avif"
 	}
 	// MP4: "ftyp" at bytes 4–7 (ISO Base Media File Format)
 	if n >= 8 && data[4] == 'f' && data[5] == 't' && data[6] == 'y' && data[7] == 'p' {

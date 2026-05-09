@@ -44,20 +44,25 @@ func TestGenerateFilename_format(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Must contain at least two underscores separating the three parts.
-	parts := strings.SplitN(name, "_", 3)
-	if len(parts) < 3 {
-		t.Fatalf("expected at least 3 underscore-separated parts, got %q", name)
+	// Format: <32-hex>-<sanitized>. The hex prefix never contains a hyphen so
+	// the first hyphen is always the separator.
+	idx := strings.Index(name, "-")
+	if idx < 1 {
+		t.Fatalf("expected <hex>-<sanitized> format, got %q", name)
 	}
-	// Timestamp must be non-empty digits.
-	for _, c := range parts[0] {
-		if c < '0' || c > '9' {
-			t.Errorf("timestamp part %q contains non-digit character %q", parts[0], c)
+	prefix := name[:idx]
+	// Prefix is 32 lowercase hex chars (16 random bytes).
+	if len(prefix) != 32 {
+		t.Errorf("hex prefix length: want 32, got %d (%q)", len(prefix), prefix)
+	}
+	for _, c := range prefix {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Errorf("hex prefix %q contains non-hex character %q", prefix, c)
 		}
 	}
-	// Random part must be 12 hex chars (6 bytes).
-	if len(parts[1]) != 12 {
-		t.Errorf("random part length: want 12, got %d (%q)", len(parts[1]), parts[1])
+	sanitized := name[idx+1:]
+	if sanitized == "" {
+		t.Error("sanitized part must not be empty")
 	}
 }
 

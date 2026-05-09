@@ -391,3 +391,104 @@ func TestHandleDelete_requiresEditorRole(t *testing.T) {
 // ─── compile-time interface check ─────────────────────────────────────────────
 
 var _ forge.DB = (*sql.DB)(nil)
+
+// ─── UploadToken tests ────────────────────────────────────────────────────────
+
+// avifMagic is a minimal AVIF header (ftyp box, brand "avif").
+var avifMagic = []byte{0x00, 0x00, 0x00, 0x1C, 'f', 't', 'y', 'p', 'a', 'v', 'i', 'f', 0x00, 0x00, 0x00, 0x00}
+
+// pdfMagic is a minimal PDF header.
+var pdfMagic = []byte{'%', 'P', 'D', 'F', '-', '1', '.', '4'}
+
+func TestHandleUpload_uploadToken_jpeg(t *testing.T) {
+	s, app := newTestServer(t)
+
+	token := "UploadToken " + app.GenerateUploadToken()
+	body, ct := buildUpload(t, "photo.jpg", jpegMagic, "a hero image")
+	req := httptest.NewRequest(http.MethodPost, "/media", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", token)
+	w := httptest.NewRecorder()
+
+	s.handleUpload(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: want 201, got %d — body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleUpload_uploadToken_avif(t *testing.T) {
+	s, app := newTestServer(t)
+
+	token := "UploadToken " + app.GenerateUploadToken()
+	body, ct := buildUpload(t, "hero.avif", avifMagic, "an AVIF image")
+	req := httptest.NewRequest(http.MethodPost, "/media", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", token)
+	w := httptest.NewRecorder()
+
+	s.handleUpload(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: want 201, got %d — body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleUpload_uploadToken_expired(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	// Create an app with a negative TTL so GenerateUploadToken returns an
+	// already-expired token.
+	appExpired := forge.New(forge.MustConfig(forge.Config{
+		BaseURL:                "https://example.com",
+		Secret:                 testSecret,
+		DB:                     openServerTestDB(t),
+		MediaUploadTokenExpiry: -time.Second,
+	}))
+	expiredToken := "UploadToken " + appExpired.GenerateUploadToken()
+
+	body, ct := buildUpload(t, "photo.jpg", jpegMagic, "test")
+	req := httptest.NewRequest(http.MethodPost, "/media", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", expiredToken)
+	w := httptest.NewRecorder()
+
+	s.handleUpload(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status: want 401, got %d — body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleUpload_uploadToken_mimeRejected(t *testing.T) {
+	s, app := newTestServer(t)
+
+	token := "UploadToken " + app.GenerateUploadToken()
+	body, ct := buildUpload(t, "doc.pdf", pdfMagic, "")
+	req := httptest.NewRequest(http.MethodPost, "/media", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", token)
+	w := httptest.NewRecorder()
+
+	s.handleUpload(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: want 422, got %d — body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleUpload_bearerToken_pdfAllowed(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	body, ct := buildUpload(t, "report.pdf", pdfMagic, "")
+	req := httptest.NewRequest(http.MethodPost, "/media", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", authorToken(t))
+	w := httptest.NewRecorder()
+
+	s.handleUpload(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: want 201, got %d — body: %s", w.Code, w.Body.String())
+	}
+}

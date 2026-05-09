@@ -3,8 +3,8 @@ module forge-cms.dev/forge-media
 go 1.26.2
 
 require (
-	forge-cms.dev/forge v1.14.1
-	modernc.org/sqlite v1.49.1
+	forge-cms.dev/forge v1.19.0
+	modernc.org/sqlite v1.50.0
 )
 
 require (
